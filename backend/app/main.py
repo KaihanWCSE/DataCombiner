@@ -69,9 +69,12 @@ async def combine_files(
 
     combined_df = pd.concat(dataframes, ignore_index=True)
 
+    preview_df = combined_df.head(10).astype(object)
+    preview_df = preview_df.where(pd.notnull(preview_df), None)
+
     return {
         "files_received": len(files),
         "rows": len(combined_df),
         "columns": list(combined_df.columns),
-        "preview": combined_df.head(10).to_dict(orient="records"),
+        "preview": preview_df.to_dict(orient="records"),
     }
