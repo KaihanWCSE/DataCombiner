@@ -17,12 +17,16 @@ def read_spreadsheet(filename: str, contents: bytes) -> pd.DataFrame:
     For XLSX files, read the first sheet for now.
     """
     if filename.endswith(".csv"):
-        return pd.read_csv(BytesIO(contents))
+        df = pd.read_csv(BytesIO(contents))
+    elif filename.endswith(".xlsx"):
+        df = pd.read_excel(BytesIO(contents))
+    else:
+        raise ValueError("Unsupported file type")
 
-    if filename.endswith(".xlsx"):
-        return pd.read_excel(BytesIO(contents))
+    df.columns = df.columns.str.strip().str.lower()
+    df = df.apply(lambda col: col.str.strip().str.lower() if col.dtype == "object" else col)
 
-    raise ValueError("Unsupported file type")
+    return df
 
 
 @app.post("/upload")
@@ -61,7 +65,7 @@ async def combine_files(
                 "error": str(error),
             }
 
-        duplicate_rows = int(combined_df.drop(columns=["source_file"]).duplicated().sum())
+        df["source_file"] = filename
         dataframes.append(df)
 
     if not dataframes:
@@ -72,7 +76,7 @@ async def combine_files(
     preview_df = combined_df.head(10).astype(object)
     preview_df = preview_df.where(pd.notnull(preview_df), None)
 
-    duplicate_rows = int(combined_df.duplicated().sum())
+    duplicate_rows = int(combined_df.drop(columns=["source_file"]).duplicated().sum())
     missing_values = combined_df.isna().sum().to_dict()
 
     return {
