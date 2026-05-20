@@ -24,7 +24,7 @@ def read_spreadsheet(filename: str, contents: bytes) -> pd.DataFrame:
         raise ValueError("Unsupported file type")
 
     df.columns = df.columns.str.strip().str.lower()
-    df = df.apply(lambda col: col.str.strip().str.lower() if col.dtype == "object" else col)
+    df = df.map(lambda value: value.strip().lower() if isinstance(value, str) else value)
 
     return df
 
