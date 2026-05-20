@@ -61,7 +61,7 @@ async def combine_files(
                 "error": str(error),
             }
 
-        df["source_file"] = filename
+        duplicate_rows = int(combined_df.drop(columns=["source_file"]).duplicated().sum())
         dataframes.append(df)
 
     if not dataframes:
@@ -72,9 +72,14 @@ async def combine_files(
     preview_df = combined_df.head(10).astype(object)
     preview_df = preview_df.where(pd.notnull(preview_df), None)
 
+    duplicate_rows = int(combined_df.duplicated().sum())
+    missing_values = combined_df.isna().sum().to_dict()
+
     return {
         "files_received": len(files),
-        "rows": len(combined_df),
+        "total_rows": len(combined_df),
         "columns": list(combined_df.columns),
+        "duplicate_rows": duplicate_rows,
+        "missing_values": missing_values,
         "preview": preview_df.to_dict(orient="records"),
     }
