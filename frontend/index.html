@@ -20,7 +20,7 @@
       margin-bottom: 24px;
     }
 
-    input, select, button {
+    input, button {
       margin-top: 12px;
       display: block;
     }
@@ -31,14 +31,29 @@
       font-weight: bold;
     }
 
-    select {
-      padding: 6px;
-      min-width: 220px;
-    }
-
     button {
       padding: 8px 16px;
       cursor: pointer;
+    }
+
+    .merge-column-option {
+      margin-top: 8px;
+      font-weight: normal;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .merge-column-option input {
+      margin-top: 0;
+      display: inline-block;
+    }
+
+    #mergeColumnsContainer {
+      margin-top: 8px;
+      padding: 12px;
+      border: 1px solid #ccc;
+      max-width: 360px;
     }
 
     table {
@@ -67,15 +82,15 @@
   <h1>DataCombiner</h1>
 
   <p class="description">
-    Upload multiple CSV or XLSX files, choose a shared merge column, preview the result, and download a combined CSV.
+    Upload multiple CSV or XLSX files, choose one or more shared merge columns, preview the result, and download a combined CSV.
   </p>
 
   <input id="fileInput" type="file" multiple accept=".csv,.xlsx" />
 
-  <label for="mergeColumnSelect">Merge column:</label>
-  <select id="mergeColumnSelect" disabled>
-    <option value="">Select files first</option>
-  </select>
+  <label>Merge column(s):</label>
+  <div id="mergeColumnsContainer">
+    Select files first.
+  </div>
 
   <button id="combineButton">Combine Files</button>
   <button id="downloadButton">Download Combined CSV</button>
@@ -85,7 +100,7 @@
 
   <script>
     const fileInput = document.getElementById("fileInput");
-    const mergeColumnSelect = document.getElementById("mergeColumnSelect");
+    const mergeColumnsContainer = document.getElementById("mergeColumnsContainer");
     const combineButton = document.getElementById("combineButton");
     const downloadButton = document.getElementById("downloadButton");
     const statusDiv = document.getElementById("status");
@@ -95,11 +110,9 @@
       const files = fileInput.files;
 
       previewDiv.innerHTML = "";
-      mergeColumnSelect.innerHTML = "";
 
       if (files.length === 0) {
-        mergeColumnSelect.disabled = true;
-        mergeColumnSelect.innerHTML = `<option value="">Select files first</option>`;
+        mergeColumnsContainer.innerHTML = "Select files first.";
         statusDiv.textContent = "Please select at least one file.";
         return;
       }
@@ -111,8 +124,7 @@
       }
 
       statusDiv.textContent = "Detecting common columns...";
-      mergeColumnSelect.disabled = true;
-      mergeColumnSelect.innerHTML = `<option value="">Loading...</option>`;
+      mergeColumnsContainer.innerHTML = "Loading...";
 
       try {
         const response = await fetch("http://127.0.0.1:8000/columns/common", {
@@ -132,8 +144,7 @@
 
         renderMergeColumnOptions(data.common_columns);
       } catch (error) {
-        mergeColumnSelect.disabled = true;
-        mergeColumnSelect.innerHTML = `<option value="">Could not detect columns</option>`;
+        mergeColumnsContainer.innerHTML = "Could not detect columns.";
         statusDiv.textContent = "Error detecting common columns.";
         previewDiv.innerHTML = `<pre>${error.message}</pre>`;
       }
@@ -148,10 +159,10 @@
         return;
       }
 
-      const mergeColumn = mergeColumnSelect.value;
+      const selectedMergeColumns = getSelectedMergeColumns();
 
-      if (!mergeColumn) {
-        statusDiv.textContent = "Please choose a merge column.";
+      if (selectedMergeColumns.length === 0) {
+        statusDiv.textContent = "Please choose at least one merge column.";
         previewDiv.innerHTML = "";
         return;
       }
@@ -162,7 +173,7 @@
         formData.append("files", file);
       }
 
-      formData.append("merge_column", mergeColumn);
+      formData.append("merge_columns", JSON.stringify(selectedMergeColumns));
 
       statusDiv.textContent = "Combining files...";
       previewDiv.innerHTML = "";
@@ -185,7 +196,7 @@
 
         const rowCount = data.row_count ?? data.total_rows ?? data.rows ?? data.preview.length;
 
-        statusDiv.textContent = `Combined successfully. Rows: ${rowCount}. Merge column: ${mergeColumn}`;
+        statusDiv.textContent = `Combined successfully. Rows: ${rowCount}. Merge column(s): ${data.merge_columns.join(", ")}`;
 
         renderTable(data.preview);
       } catch (error) {
@@ -202,10 +213,10 @@
         return;
       }
 
-      const mergeColumn = mergeColumnSelect.value;
+      const selectedMergeColumns = getSelectedMergeColumns();
 
-      if (!mergeColumn) {
-        statusDiv.textContent = "Please choose a merge column.";
+      if (selectedMergeColumns.length === 0) {
+        statusDiv.textContent = "Please choose at least one merge column.";
         return;
       }
 
@@ -215,7 +226,7 @@
         formData.append("files", file);
       }
 
-      formData.append("merge_column", mergeColumn);
+      formData.append("merge_columns", JSON.stringify(selectedMergeColumns));
 
       statusDiv.textContent = "Preparing download...";
 
@@ -233,10 +244,7 @@
 
         if (contentType.includes("application/json")) {
           const data = await response.json();
-
-          if (data.error) {
-            throw new Error(data.error);
-          }
+          throw new Error(data.error ?? "Expected CSV but received JSON response");
         }
 
         const blob = await response.blob();
@@ -260,24 +268,45 @@
     });
 
     function renderMergeColumnOptions(columns) {
-      mergeColumnSelect.innerHTML = "";
+      mergeColumnsContainer.innerHTML = "";
 
       if (!columns || columns.length === 0) {
-        mergeColumnSelect.disabled = true;
-        mergeColumnSelect.innerHTML = `<option value="">No common columns found</option>`;
+        mergeColumnsContainer.innerHTML = "No common columns found.";
         statusDiv.textContent = "No shared columns found across selected files.";
         return;
       }
 
       for (const column of columns) {
-        const option = document.createElement("option");
-        option.value = column;
-        option.textContent = column;
-        mergeColumnSelect.appendChild(option);
+        const label = document.createElement("label");
+        label.className = "merge-column-option";
+
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.value = column;
+        checkbox.className = "merge-column-checkbox";
+
+        if (columns.length === 1) {
+          checkbox.checked = true;
+        }
+
+        const text = document.createElement("span");
+        text.textContent = column;
+
+        label.appendChild(checkbox);
+        label.appendChild(text);
+        mergeColumnsContainer.appendChild(label);
       }
 
-      mergeColumnSelect.disabled = false;
-      statusDiv.textContent = `Detected ${columns.length} common column(s). Choose one and combine.`;
+      if (columns.length === 1) {
+        statusDiv.textContent = "Detected 1 common column. It has been selected automatically.";
+      } else {
+        statusDiv.textContent = `Detected ${columns.length} common column(s). Choose one or more and combine.`;
+      }
+    }
+
+    function getSelectedMergeColumns() {
+      const checkboxes = document.querySelectorAll(".merge-column-checkbox:checked");
+      return Array.from(checkboxes).map((checkbox) => checkbox.value);
     }
 
     function renderTable(rows) {
