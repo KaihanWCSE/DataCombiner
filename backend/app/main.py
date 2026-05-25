@@ -96,15 +96,36 @@ def clean_source_name(filename: str) -> str:
     name_without_extension = filename.rsplit(".", 1)[0]
     return normalize_text(name_without_extension)
 
+def mark_empty_source_values(
+    df: pd.DataFrame,
+    merge_columns: list[str],
+) -> pd.DataFrame:
+    """
+    For rows that exist in a source file, mark empty non-merge cells as '?'.
+
+    This preserves the distinction between:
+    - person appeared in the source file but a value was blank -> '?'
+    - person did not appear in the source file at all -> blank after merge
+    """
+    df = df.copy()
+    merge_column_set = set(merge_columns)
+
+    for column in df.columns:
+        if column not in merge_column_set:
+            df[column] = df[column].where(pd.notnull(df[column]), "?")
+
+    return df
 
 def prepare_file_for_merge(
     filename: str,
     df: pd.DataFrame,
     merge_columns: list[str],
+    presence_column: str,
 ) -> pd.DataFrame:
     """
     Keep merge columns shared.
     Rename non-merge columns with their source filename.
+    Keep internal presence marker unrenamed for appearance counting.
     """
     source_name = clean_source_name(filename)
     merge_column_set = set(merge_columns)
@@ -112,8 +133,10 @@ def prepare_file_for_merge(
     renamed_columns = {}
 
     for column in df.columns:
-        if column not in merge_column_set:
-            renamed_columns[column] = f"{source_name} {column}"
+        if column in merge_column_set or column == presence_column:
+            continue
+
+        renamed_columns[column] = f"{source_name} {column}"
 
     return df.rename(columns=renamed_columns)
 
@@ -124,12 +147,19 @@ async def combine_uploaded_files(
 ) -> tuple[pd.DataFrame, list[dict]]:
     """
     Read, normalize, prepare, and merge uploaded files into one DataFrame.
+
+    Attendance-roster behavior:
+    - each uploaded file represents people who appeared/attended
+    - appearance_count counts how many source files each merged person appeared in
+    - blank values inside a source file become '?'
+    - missing rows from a source file remain blank after merge
     """
     dataframes = []
     files_processed = []
     merge_column_set = set(merge_columns)
+    presence_columns = []
 
-    for file in files:
+    for index, file in enumerate(files):
         filename = file.filename
         contents = await file.read()
 
@@ -141,15 +171,65 @@ async def combine_uploaded_files(
                 f"{filename} is missing merge column(s): {', '.join(sorted(missing_merge_columns))}"
             )
 
-        df = prepare_file_for_merge(filename, df, merge_columns)
+        presence_column = f"__present_source_{index}"
+        presence_columns.append(presence_column)
+
+        df = mark_empty_source_values(df, merge_columns)
+        df[presence_column] = 1
+
+        df = prepare_file_for_merge(
+            filename=filename,
+            df=df,
+            merge_columns=merge_columns,
+            presence_column=presence_column,
+        )
 
         files_processed.append({
             "filename": filename,
             "rows": len(df),
-            "columns": list(df.columns),
+            "columns": [
+                column for column in df.columns
+                if column != presence_column
+            ],
         })
 
         dataframes.append(df)
+
+    if not dataframes:
+        raise ValueError("No files uploaded")
+
+    combined_df = dataframes[0]
+
+    for df in dataframes[1:]:
+        combined_df = pd.merge(
+            combined_df,
+            df,
+            on=merge_columns,
+            how="outer",
+        )
+
+    combined_df["appearance_count"] = (
+        combined_df[presence_columns]
+        .fillna(0)
+        .sum(axis=1)
+        .astype(int)
+    )
+
+    combined_df = combined_df.drop(columns=presence_columns)
+
+    ordered_columns = (
+        merge_columns
+        + ["appearance_count"]
+        + [
+            column for column in combined_df.columns
+            if column not in merge_columns and column != "appearance_count"
+        ]
+    )
+
+    combined_df = combined_df[ordered_columns]
+    combined_df = combined_df.sort_values(by=merge_columns).reset_index(drop=True)
+
+    return combined_df, files_processed
 
     if not dataframes:
         raise ValueError("No files uploaded")
