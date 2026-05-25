@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>DataCombiner</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 1000px;
+      margin: 40px auto;
+      padding: 0 20px;
+    }
+
+    h1 {
+      margin-bottom: 8px;
+    }
+
+    .description {
+      color: #555;
+      margin-bottom: 24px;
+    }
+
+    input, button {
+      margin-top: 12px;
+      display: block;
+    }
+
+    button {
+      padding: 8px 16px;
+      cursor: pointer;
+    }
+
+    table {
+      border-collapse: collapse;
+      margin-top: 24px;
+      width: 100%;
+    }
+
+    th, td {
+      border: 1px solid #ccc;
+      padding: 8px;
+      text-align: left;
+    }
+
+    th {
+      background-color: #f2f2f2;
+    }
+
+    #status {
+      margin-top: 16px;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <h1>DataCombiner</h1>
+  <p class="description">
+    Upload multiple CSV or XLSX files and combine them into one preview table.
+  </p>
+
+  <input id="fileInput" type="file" multiple accept=".csv,.xlsx" />
+  <button id="combineButton">Combine Files</button>
+
+  <div id="status"></div>
+  <div id="preview"></div>
+
+  <script>
+    const fileInput = document.getElementById("fileInput");
+    const combineButton = document.getElementById("combineButton");
+    const statusDiv = document.getElementById("status");
+    const previewDiv = document.getElementById("preview");
+
+    combineButton.addEventListener("click", async () => {
+      const files = fileInput.files;
+
+      if (files.length === 0) {
+        statusDiv.textContent = "Please select at least one file.";
+        previewDiv.innerHTML = "";
+        return;
+      }
+
+      const formData = new FormData();
+
+      for (const file of files) {
+        formData.append("files", file);
+      }
+
+      statusDiv.textContent = "Combining files...";
+      previewDiv.innerHTML = "";
+
+      try {
+        const response = await fetch("http://127.0.0.1:8000/combine", {
+          method: "POST",
+          body: formData
+        });
+
+        if (!response.ok) {
+          throw new Error(`Server error: ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        const rowCount = data.row_count ?? data.total_rows ?? data.rows ?? data.preview.length;
+
+        statusDiv.textContent = `Combined successfully. Rows: ${rowCount}`;
+
+        renderTable(data.preview);
+      } catch (error) {
+        statusDiv.textContent = "Error combining files.";
+        previewDiv.innerHTML = `<pre>${error.message}</pre>`;
+      }
+    });
+
+    function renderTable(rows) {
+      if (!rows || rows.length === 0) {
+        previewDiv.innerHTML = "<p>No preview data returned.</p>";
+        return;
+      }
+
+      const columns = Object.keys(rows[0]);
+
+      let html = "<table>";
+      html += "<thead><tr>";
+
+      for (const column of columns) {
+        html += `<th>${column}</th>`;
+      }
+
+      html += "</tr></thead>";
+      html += "<tbody>";
+
+      for (const row of rows) {
+        html += "<tr>";
+
+        for (const column of columns) {
+          const value = row[column] === null ? "" : row[column];
+          html += `<td>${value}</td>`;
+        }
+
+        html += "</tr>";
+      }
+
+      html += "</tbody></table>";
+
+      previewDiv.innerHTML = html;
+    }
+  </script>
+</body>
+</html>
