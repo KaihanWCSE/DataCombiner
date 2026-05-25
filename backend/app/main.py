@@ -1,8 +1,9 @@
 from fastapi import FastAPI, UploadFile, File
 import pandas as pd
-from io import BytesIO
 from typing import Annotated
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+import io
 
 app = FastAPI()
 
@@ -26,9 +27,9 @@ def read_spreadsheet(filename: str, contents: bytes) -> pd.DataFrame:
     For XLSX files, read the first sheet for now.
     """
     if filename.endswith(".csv"):
-        df = pd.read_csv(BytesIO(contents))
+        df = pd.read_csv(io.BytesIO(contents))
     elif filename.endswith(".xlsx"):
-        df = pd.read_excel(BytesIO(contents))
+        df = pd.read_excel(io.BytesIO(contents))
     else:
         raise ValueError("Unsupported file type")
 
@@ -162,3 +163,53 @@ async def combine_files(
         "missing_values": missing_values,
         "preview": preview_df.to_dict(orient="records"),
     }
+
+@app.post("/combine/download")
+async def download_combined_files(
+    files: Annotated[list[UploadFile], File(description="Upload multiple CSV/XLSX files")]
+):
+    dataframes = []
+
+    merge_columns = {"names"}
+
+    for file in files:
+        filename = file.filename
+        contents = await file.read()
+
+        try:
+            df = read_spreadsheet(filename, contents)
+            df = prepare_file_for_merge(filename, df, merge_columns)
+        except ValueError as error:
+            return {
+                "filename": filename,
+                "error": str(error),
+            }
+
+        dataframes.append(df)
+
+    if not dataframes:
+        return {"error": "No files uploaded"}
+
+    combined_df = dataframes[0]
+
+    for df in dataframes[1:]:
+        combined_df = pd.merge(
+            combined_df,
+            df,
+            on=list(merge_columns),
+            how="outer",
+        )
+
+    combined_df = combined_df.sort_values(by=list(merge_columns)).reset_index(drop=True)
+
+    csv_buffer = io.StringIO()
+    combined_df.to_csv(csv_buffer, index=False)
+    csv_buffer.seek(0)
+
+    return StreamingResponse(
+        csv_buffer,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": "attachment; filename=combined.csv"
+        },
+    )

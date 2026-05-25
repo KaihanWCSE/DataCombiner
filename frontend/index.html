@@ -60,6 +60,7 @@
 
   <input id="fileInput" type="file" multiple accept=".csv,.xlsx" />
   <button id="combineButton">Combine Files</button>
+  <button id="downloadButton">Download Combined CSV</button>
 
   <div id="status"></div>
   <div id="preview"></div>
@@ -69,6 +70,7 @@
     const combineButton = document.getElementById("combineButton");
     const statusDiv = document.getElementById("status");
     const previewDiv = document.getElementById("preview");
+    const downloadButton = document.getElementById("downloadButton");
 
     combineButton.addEventListener("click", async () => {
       const files = fileInput.files;
@@ -109,6 +111,52 @@
         statusDiv.textContent = "Error combining files.";
         previewDiv.innerHTML = `<pre>${error.message}</pre>`;
       }
+    });
+
+    downloadButton.addEventListener("click", async () => {
+    const files = fileInput.files;
+
+    if (files.length === 0) {
+        statusDiv.textContent = "Please select at least one file.";
+        return;
+    }
+
+    const formData = new FormData();
+
+    for (const file of files) {
+        formData.append("files", file);
+    }
+
+    statusDiv.textContent = "Preparing download...";
+
+    try {
+        const response = await fetch("http://127.0.0.1:8000/combine/download", {
+        method: "POST",
+        body: formData
+        });
+
+        if (!response.ok) {
+        throw new Error(`Server error: ${response.status}`);
+        }
+
+        const blob = await response.blob();
+
+        const downloadUrl = window.URL.createObjectURL(blob);
+        const temporaryLink = document.createElement("a");
+
+        temporaryLink.href = downloadUrl;
+        temporaryLink.download = "combined.csv";
+        document.body.appendChild(temporaryLink);
+        temporaryLink.click();
+
+        temporaryLink.remove();
+        window.URL.revokeObjectURL(downloadUrl);
+
+        statusDiv.textContent = "Download ready.";
+    } catch (error) {
+        statusDiv.textContent = "Error downloading combined file.";
+        previewDiv.innerHTML = `<pre>${error.message}</pre>`;
+    }
     });
 
     function renderTable(rows) {
