@@ -231,23 +231,6 @@ async def combine_uploaded_files(
 
     return combined_df, files_processed
 
-    if not dataframes:
-        raise ValueError("No files uploaded")
-
-    combined_df = dataframes[0]
-
-    for df in dataframes[1:]:
-        combined_df = pd.merge(
-            combined_df,
-            df,
-            on=merge_columns,
-            how="outer",
-        )
-
-    combined_df = combined_df.sort_values(by=merge_columns).reset_index(drop=True)
-
-    return combined_df, files_processed
-
 
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
