@@ -82,6 +82,48 @@ def prepare_file_for_merge(
 
     return df.rename(columns=renamed_columns)
 
+async def combine_uploaded_files(
+    files: list[UploadFile],
+    merge_columns: set[str],
+) -> tuple[pd.DataFrame, list[dict]]:
+    """
+    Read, normalize, prepare, and merge uploaded files into one DataFrame.
+    """
+    dataframes = []
+    files_processed = []
+
+    for file in files:
+        filename = file.filename
+        contents = await file.read()
+
+        df = read_spreadsheet(filename, contents)
+        df = prepare_file_for_merge(filename, df, merge_columns)
+
+        files_processed.append({
+            "filename": filename,
+            "rows": len(df),
+            "columns": list(df.columns),
+        })
+
+        dataframes.append(df)
+
+    if not dataframes:
+        raise ValueError("No files uploaded")
+
+    combined_df = dataframes[0]
+
+    for df in dataframes[1:]:
+        combined_df = pd.merge(
+            combined_df,
+            df,
+            on=list(merge_columns),
+            how="outer",
+        )
+
+    combined_df = combined_df.sort_values(by=list(merge_columns)).reset_index(drop=True)
+
+    return combined_df, files_processed
+
 
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
@@ -105,49 +147,15 @@ async def upload_file(file: UploadFile = File(...)):
 async def combine_files(
     files: Annotated[list[UploadFile], File(description="Upload multiple CSV/XLSX files")]
 ):
-    dataframes = []
-    files_processed = []
-
     # Temporary hardcoded user choice.
     # Later, the frontend will ask the user whether each duplicate column
     # should be merged or kept separate.
     merge_columns = {"names"}
 
-    for file in files:
-        filename = file.filename
-        contents = await file.read()
-
-        try:
-            df = read_spreadsheet(filename, contents)
-            df = prepare_file_for_merge(filename, df, merge_columns)
-        except ValueError as error:
-            return {
-                "filename": filename,
-                "error": str(error),
-            }
-
-        files_processed.append({
-            "filename": filename,
-            "rows": len(df),
-            "columns": list(df.columns),
-        })
-
-        dataframes.append(df)
-
-    if not dataframes:
-        return {"error": "No files uploaded"}
-
-    combined_df = dataframes[0]
-
-    for df in dataframes[1:]:
-        combined_df = pd.merge(
-            combined_df,
-            df,
-            on=list(merge_columns),
-            how="outer",
-        )
-
-    combined_df = combined_df.sort_values(by=list(merge_columns)).reset_index(drop=True)
+    try:
+        combined_df, files_processed = await combine_uploaded_files(files, merge_columns)
+    except ValueError as error:
+        return {"error": str(error)}
 
     preview_df = combined_df.head(10).astype(object)
     preview_df = preview_df.where(pd.notnull(preview_df), None)
@@ -168,39 +176,12 @@ async def combine_files(
 async def download_combined_files(
     files: Annotated[list[UploadFile], File(description="Upload multiple CSV/XLSX files")]
 ):
-    dataframes = []
-
     merge_columns = {"names"}
 
-    for file in files:
-        filename = file.filename
-        contents = await file.read()
-
-        try:
-            df = read_spreadsheet(filename, contents)
-            df = prepare_file_for_merge(filename, df, merge_columns)
-        except ValueError as error:
-            return {
-                "filename": filename,
-                "error": str(error),
-            }
-
-        dataframes.append(df)
-
-    if not dataframes:
-        return {"error": "No files uploaded"}
-
-    combined_df = dataframes[0]
-
-    for df in dataframes[1:]:
-        combined_df = pd.merge(
-            combined_df,
-            df,
-            on=list(merge_columns),
-            how="outer",
-        )
-
-    combined_df = combined_df.sort_values(by=list(merge_columns)).reset_index(drop=True)
+    try:
+        combined_df, _ = await combine_uploaded_files(files, merge_columns)
+    except ValueError as error:
+        return {"error": str(error)}
 
     csv_buffer = io.StringIO()
     combined_df.to_csv(csv_buffer, index=False)
