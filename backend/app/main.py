@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Form
 import pandas as pd
 from typing import Annotated
 from fastapi.middleware.cors import CORSMiddleware
@@ -97,6 +97,13 @@ async def combine_uploaded_files(
         contents = await file.read()
 
         df = read_spreadsheet(filename, contents)
+
+        missing_merge_columns = merge_columns - set(df.columns)
+        if missing_merge_columns:
+            raise ValueError(
+                f"{filename} is missing merge column(s): {', '.join(sorted(missing_merge_columns))}"
+            )
+
         df = prepare_file_for_merge(filename, df, merge_columns)
 
         files_processed.append({
@@ -142,15 +149,50 @@ async def upload_file(file: UploadFile = File(...)):
         "preview": df.head(5).to_dict(orient="records"),
     }
 
+@app.post("/columns/common")
+async def get_common_columns(
+    files: Annotated[list[UploadFile], File(description="Upload multiple CSV/XLSX files")]
+):
+    """
+    Return the columns shared by all uploaded files after normalization.
+    """
+    column_sets = []
+    files_processed = []
+
+    try:
+        for file in files:
+            filename = file.filename
+            contents = await file.read()
+
+            df = read_spreadsheet(filename, contents)
+            columns = list(df.columns)
+
+            column_sets.append(set(columns))
+            files_processed.append({
+                "filename": filename,
+                "columns": columns,
+            })
+    except ValueError as error:
+        return {"error": str(error)}
+
+    if not column_sets:
+        return {"error": "No files uploaded"}
+
+    common_columns = set.intersection(*column_sets)
+
+    return {
+        "files_received": len(files),
+        "files_processed": files_processed,
+        "common_columns": sorted(common_columns),
+    }
 
 @app.post("/combine")
 async def combine_files(
-    files: Annotated[list[UploadFile], File(description="Upload multiple CSV/XLSX files")]
+    files: Annotated[list[UploadFile], File(description="Upload multiple CSV/XLSX files")],
+    merge_column: Annotated[str, Form(description="Column to merge files on")],
 ):
-    # Temporary hardcoded user choice.
-    # Later, the frontend will ask the user whether each duplicate column
-    # should be merged or kept separate.
-    merge_columns = {"names"}
+    merge_column = normalize_text(merge_column)
+    merge_columns = {merge_column}
 
     try:
         combined_df, files_processed = await combine_uploaded_files(files, merge_columns)
@@ -174,9 +216,11 @@ async def combine_files(
 
 @app.post("/combine/download")
 async def download_combined_files(
-    files: Annotated[list[UploadFile], File(description="Upload multiple CSV/XLSX files")]
+    files: Annotated[list[UploadFile], File(description="Upload multiple CSV/XLSX files")],
+    merge_column: Annotated[str, Form(description="Column to merge files on")],
 ):
-    merge_columns = {"names"}
+    merge_column = normalize_text(merge_column)
+    merge_columns = {merge_column}
 
     try:
         combined_df, _ = await combine_uploaded_files(files, merge_columns)

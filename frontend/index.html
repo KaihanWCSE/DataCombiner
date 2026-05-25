@@ -20,9 +20,20 @@
       margin-bottom: 24px;
     }
 
-    input, button {
+    input, select, button {
       margin-top: 12px;
       display: block;
+    }
+
+    label {
+      margin-top: 16px;
+      display: block;
+      font-weight: bold;
+    }
+
+    select {
+      padding: 6px;
+      min-width: 220px;
     }
 
     button {
@@ -54,11 +65,18 @@
 </head>
 <body>
   <h1>DataCombiner</h1>
+
   <p class="description">
-    Upload multiple CSV or XLSX files and combine them into one preview table.
+    Upload multiple CSV or XLSX files, choose a shared merge column, preview the result, and download a combined CSV.
   </p>
 
   <input id="fileInput" type="file" multiple accept=".csv,.xlsx" />
+
+  <label for="mergeColumnSelect">Merge column:</label>
+  <select id="mergeColumnSelect" disabled>
+    <option value="">Select files first</option>
+  </select>
+
   <button id="combineButton">Combine Files</button>
   <button id="downloadButton">Download Combined CSV</button>
 
@@ -67,10 +85,59 @@
 
   <script>
     const fileInput = document.getElementById("fileInput");
+    const mergeColumnSelect = document.getElementById("mergeColumnSelect");
     const combineButton = document.getElementById("combineButton");
+    const downloadButton = document.getElementById("downloadButton");
     const statusDiv = document.getElementById("status");
     const previewDiv = document.getElementById("preview");
-    const downloadButton = document.getElementById("downloadButton");
+
+    fileInput.addEventListener("change", async () => {
+      const files = fileInput.files;
+
+      previewDiv.innerHTML = "";
+      mergeColumnSelect.innerHTML = "";
+
+      if (files.length === 0) {
+        mergeColumnSelect.disabled = true;
+        mergeColumnSelect.innerHTML = `<option value="">Select files first</option>`;
+        statusDiv.textContent = "Please select at least one file.";
+        return;
+      }
+
+      const formData = new FormData();
+
+      for (const file of files) {
+        formData.append("files", file);
+      }
+
+      statusDiv.textContent = "Detecting common columns...";
+      mergeColumnSelect.disabled = true;
+      mergeColumnSelect.innerHTML = `<option value="">Loading...</option>`;
+
+      try {
+        const response = await fetch("http://127.0.0.1:8000/columns/common", {
+          method: "POST",
+          body: formData
+        });
+
+        if (!response.ok) {
+          throw new Error(`Server error: ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        if (data.error) {
+          throw new Error(data.error);
+        }
+
+        renderMergeColumnOptions(data.common_columns);
+      } catch (error) {
+        mergeColumnSelect.disabled = true;
+        mergeColumnSelect.innerHTML = `<option value="">Could not detect columns</option>`;
+        statusDiv.textContent = "Error detecting common columns.";
+        previewDiv.innerHTML = `<pre>${error.message}</pre>`;
+      }
+    });
 
     combineButton.addEventListener("click", async () => {
       const files = fileInput.files;
@@ -81,11 +148,21 @@
         return;
       }
 
+      const mergeColumn = mergeColumnSelect.value;
+
+      if (!mergeColumn) {
+        statusDiv.textContent = "Please choose a merge column.";
+        previewDiv.innerHTML = "";
+        return;
+      }
+
       const formData = new FormData();
 
       for (const file of files) {
         formData.append("files", file);
       }
+
+      formData.append("merge_column", mergeColumn);
 
       statusDiv.textContent = "Combining files...";
       previewDiv.innerHTML = "";
@@ -102,9 +179,13 @@
 
         const data = await response.json();
 
+        if (data.error) {
+          throw new Error(data.error);
+        }
+
         const rowCount = data.row_count ?? data.total_rows ?? data.rows ?? data.preview.length;
 
-        statusDiv.textContent = `Combined successfully. Rows: ${rowCount}`;
+        statusDiv.textContent = `Combined successfully. Rows: ${rowCount}. Merge column: ${mergeColumn}`;
 
         renderTable(data.preview);
       } catch (error) {
@@ -114,29 +195,48 @@
     });
 
     downloadButton.addEventListener("click", async () => {
-    const files = fileInput.files;
+      const files = fileInput.files;
 
-    if (files.length === 0) {
+      if (files.length === 0) {
         statusDiv.textContent = "Please select at least one file.";
         return;
-    }
+      }
 
-    const formData = new FormData();
+      const mergeColumn = mergeColumnSelect.value;
 
-    for (const file of files) {
+      if (!mergeColumn) {
+        statusDiv.textContent = "Please choose a merge column.";
+        return;
+      }
+
+      const formData = new FormData();
+
+      for (const file of files) {
         formData.append("files", file);
-    }
+      }
 
-    statusDiv.textContent = "Preparing download...";
+      formData.append("merge_column", mergeColumn);
 
-    try {
+      statusDiv.textContent = "Preparing download...";
+
+      try {
         const response = await fetch("http://127.0.0.1:8000/combine/download", {
-        method: "POST",
-        body: formData
+          method: "POST",
+          body: formData
         });
 
         if (!response.ok) {
-        throw new Error(`Server error: ${response.status}`);
+          throw new Error(`Server error: ${response.status}`);
+        }
+
+        const contentType = response.headers.get("content-type") || "";
+
+        if (contentType.includes("application/json")) {
+          const data = await response.json();
+
+          if (data.error) {
+            throw new Error(data.error);
+          }
         }
 
         const blob = await response.blob();
@@ -153,11 +253,32 @@
         window.URL.revokeObjectURL(downloadUrl);
 
         statusDiv.textContent = "Download ready.";
-    } catch (error) {
+      } catch (error) {
         statusDiv.textContent = "Error downloading combined file.";
         previewDiv.innerHTML = `<pre>${error.message}</pre>`;
-    }
+      }
     });
+
+    function renderMergeColumnOptions(columns) {
+      mergeColumnSelect.innerHTML = "";
+
+      if (!columns || columns.length === 0) {
+        mergeColumnSelect.disabled = true;
+        mergeColumnSelect.innerHTML = `<option value="">No common columns found</option>`;
+        statusDiv.textContent = "No shared columns found across selected files.";
+        return;
+      }
+
+      for (const column of columns) {
+        const option = document.createElement("option");
+        option.value = column;
+        option.textContent = column;
+        mergeColumnSelect.appendChild(option);
+      }
+
+      mergeColumnSelect.disabled = false;
+      statusDiv.textContent = `Detected ${columns.length} common column(s). Choose one and combine.`;
+    }
 
     function renderTable(rows) {
       if (!rows || rows.length === 0) {
